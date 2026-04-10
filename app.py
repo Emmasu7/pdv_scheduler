@@ -70,8 +70,9 @@ def planificar():
                 asesores=ASESORES,
                 fecha_inicio=fecha_inicio,
                 semanas=semanas,
-                turno_fijo=TURNO_FIJO,
+                aplicar_restriccion_asesor_fijo=True,   # ← parámetro real
                 asesor_fijo=ASESOR_FIJO,
+                turno_fijo=TURNO_FIJO,
             )
         else:
             scheduler = PDVScheduler(

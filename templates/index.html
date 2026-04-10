@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDV Scheduler — Planificación de Turnos</title>
+  <style>
+    /* ── Reset & tokens ─────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --color-bg:        #f7f6f2;
+      --color-surface:   #ffffff;
+      --color-border:    #d4d1ca;
+      --color-text:      #28251d;
+      --color-muted:     #7a7974;
+      --color-primary:   #01696f;
+      --color-primary-h: #0c4e54;
+      --color-accent-bg: #cedcd8;
+      --color-error:     #a12c7b;
+      --radius:          0.625rem;
+      --shadow:          0 4px 16px oklch(0.2 0.01 80 / 0.08);
+      --transition:      180ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    html {
+      -webkit-font-smoothing: antialiased;
+      scroll-behavior: smooth;
+    }
+
+    body {
+      min-height: 100dvh;
+      background: var(--color-bg);
+      color: var(--color-text);
+      font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+      font-size: 1rem;
+      line-height: 1.6;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+
+    /* ── Tarjeta principal ──────────────────────────────────────── */
+    .card {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      width: 100%;
+      max-width: 520px;
+      padding: 2.5rem 2rem;
+    }
+
+    /* ── Encabezado ─────────────────────────────────────────────── */
+    .header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    .logo {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 52px;
+      height: 52px;
+      background: var(--color-accent-bg);
+      border-radius: 50%;
+      margin-bottom: 1rem;
+    }
+
+    .logo svg {
+      width: 26px;
+      height: 26px;
+      color: var(--color-primary);
+    }
+
+    .header h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--color-text);
+      margin-bottom: 0.375rem;
+    }
+
+    .header p {
+      font-size: 0.9rem;
+      color: var(--color-muted);
+      max-width: 36ch;
+      margin-inline: auto;
+    }
+
+    /* ── Formulario ─────────────────────────────────────────────── */
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+
+    label {
+      display: block;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--color-text);
+      margin-bottom: 0.375rem;
+    }
+
+    label .hint {
+      font-weight: 400;
+      color: var(--color-muted);
+    }
+
+    input[type="date"],
+    select {
+      width: 100%;
+      padding: 0.625rem 0.875rem;
+      border: 1px solid var(--color-border);
+      border-radius: calc(var(--radius) - 2px);
+      background: var(--color-bg);
+      color: var(--color-text);
+      font-size: 0.9375rem;
+      font-family: inherit;
+      transition: border-color var(--transition), box-shadow var(--transition);
+      appearance: none;
+      -webkit-appearance: none;
+    }
+
+    /* Flecha personalizada para select */
+    .select-wrapper {
+      position: relative;
+    }
+
+    .select-wrapper::after {
+      content: "";
+      position: absolute;
+      right: 0.875rem;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 0;
+      height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-top: 6px solid var(--color-muted);
+      pointer-events: none;
+    }
+
+    input[type="date"]:focus,
+    select:focus {
+      outline: none;
+      border-color: var(--color-primary);
+      box-shadow: 0 0 0 3px oklch(from var(--color-primary, #01696f) l c h / 0.15);
+    }
+
+    /* ── Checkbox ───────────────────────────────────────────────── */
+    .checkbox-group {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      background: var(--color-bg);
+      border: 1px solid var(--color-border);
+      border-radius: calc(var(--radius) - 2px);
+      padding: 0.875rem 1rem;
+      cursor: pointer;
+      transition: border-color var(--transition), background var(--transition);
+    }
+
+    .checkbox-group:hover {
+      border-color: var(--color-primary);
+      background: var(--color-accent-bg);
+    }
+
+    .checkbox-group input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      min-width: 18px;
+      accent-color: var(--color-primary);
+      cursor: pointer;
+      margin-top: 2px;
+    }
+
+    .checkbox-group .check-label {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+
+    .checkbox-group .check-label strong {
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .checkbox-group .check-label span {
+      font-size: 0.8125rem;
+      color: var(--color-muted);
+    }
+
+    /* ── Botón ──────────────────────────────────────────────────── */
+    .btn-primary {
+      width: 100%;
+      padding: 0.75rem 1.5rem;
+      background: var(--color-primary);
+      color: #ffffff;
+      border: none;
+      border-radius: calc(var(--radius) - 2px);
+      font-size: 0.9375rem;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background var(--transition), transform var(--transition);
+      margin-top: 0.5rem;
+    }
+
+    .btn-primary:hover { background: var(--color-primary-h); }
+    .btn-primary:active { transform: scale(0.98); }
+    .btn-primary:focus-visible {
+      outline: 2px solid var(--color-primary);
+      outline-offset: 3px;
+    }
+
+    /* ── Divisor ────────────────────────────────────────────────── */
+    .divider {
+      height: 1px;
+      background: var(--color-border);
+      margin: 1.75rem 0;
+    }
+
+    /* ── Indicadores de turno (leyenda) ─────────────────────────── */
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      justify-content: center;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      padding: 0.25rem 0.625rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 500;
+    }
+
+    .badge-apertura  { background: #d4edda; color: #155724; }
+    .badge-intermedio { background: #fff3cd; color: #856404; }
+    .badge-cierre    { background: #f8d7da; color: #721c24; }
+
+    .badge::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    /* ── Footer ─────────────────────────────────────────────────── */
+    footer {
+      margin-top: 1.5rem;
+      font-size: 0.8125rem;
+      color: var(--color-muted);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <!-- Encabezado -->
+    <header class="header">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+          <line x1="16" y1="2" x2="16" y2="6"/>
+          <line x1="8" y1="2" x2="8" y2="6"/>
+          <line x1="3" y1="10" x2="21" y2="10"/>
+          <circle cx="12" cy="16" r="2"/>
+        </svg>
+      </div>
+      <h1>PDV Scheduler</h1>
+      <p>Genera la planificación semanal de turnos para el punto de venta usando CP-SAT.</p>
+    </header>
+
+    <!-- Formulario -->
+    <form action="/planificar" method="POST" novalidate>
+
+      <!-- Fecha de inicio -->
+      <div class="form-group">
+        <label for="fecha_inicio">
+          Fecha de inicio
+          <span class="hint">— debe ser lunes</span>
+        </label>
+        <input
+          type="date"
+          id="fecha_inicio"
+          name="fecha_inicio"
+          value="{{ fecha_default }}"
+          required
+          aria-describedby="fecha-hint"
+        />
+        <p id="fecha-hint" style="font-size:.8rem;color:var(--color-muted);margin-top:.3rem;">
+          La planificación parte desde el lunes seleccionado.
+        </p>
+      </div>
+
+      <!-- Semanas -->
+      <div class="form-group">
+        <label for="semanas">Período a planificar</label>
+        <div class="select-wrapper">
+          <select id="semanas" name="semanas" required>
+            <option value="1">1 semana</option>
+            <option value="4">4 semanas (1 mes)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Restricción especial -->
+      <div class="form-group">
+        <label as="div">Restricción especial</label>
+        <label class="checkbox-group" for="aplicar_restriccion">
+          <input type="checkbox" id="aplicar_restriccion" name="aplicar_restriccion" />
+          <div class="check-label">
+            <strong>Fijar turno de Asesor_1</strong>
+            <span>Asesor_1 siempre tendrá turno APERTURA durante todo el período.</span>
+          </div>
+        </label>
+      </div>
+
+      <button type="submit" class="btn-primary">
+        ▶ Generar planificación
+      </button>
+    </form>
+
+    <div class="divider"></div>
+
+    <!-- Leyenda de colores -->
+    <div class="legend" role="list" aria-label="Colores por tipo de turno">
+      <span class="badge badge-apertura" role="listitem">APERTURA</span>
+      <span class="badge badge-intermedio" role="listitem">INTERMEDIO</span>
+      <span class="badge badge-cierre" role="listitem">CIERRE</span>
+    </div>
+  </div>
+
+  <footer>
+    PDV Scheduler &copy; 2025 — Prueba Técnica CP-SAT
+  </footer>
+
+</body>
+</html>

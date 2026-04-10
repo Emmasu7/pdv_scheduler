@@ -65,16 +65,20 @@ def planificar():
         semanas = int(semanas_str)
 
         # ── Construcción del scheduler ────────────────────────────────────────
-        turno_fijo_param = TURNO_FIJO if aplicar_restriccion else None
-        asesor_fijo_param = ASESOR_FIJO if aplicar_restriccion else None
-
-        scheduler = PDVScheduler(
-            asesores=ASESORES,
-            fecha_inicio=fecha_inicio,
-            semanas=semanas,
-            turno_fijo=turno_fijo_param,
-            asesor_fijo=asesor_fijo_param,
-        )
+        if aplicar_restriccion:
+            scheduler = PDVScheduler(
+                asesores=ASESORES,
+                fecha_inicio=fecha_inicio,
+                semanas=semanas,
+                turno_fijo=TURNO_FIJO,
+                asesor_fijo=ASESOR_FIJO,
+            )
+        else:
+            scheduler = PDVScheduler(
+                asesores=ASESORES,
+                fecha_inicio=fecha_inicio,
+                semanas=semanas,
+            )
 
         # ── Ejecución del solver ──────────────────────────────────────────────
         estado = scheduler.resolver()

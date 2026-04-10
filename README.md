@@ -32,7 +32,7 @@ Python 3.11 o superior.
 ```bash
 # 1. Clonar el repositorio
 git clone https://github.com/Emmasu7/pdv_scheduler.git
-cd pdv-scheduler
+cd pdv_scheduler
 
 # 2. Crear entorno virtual (recomendado)
 python -m venv .venv

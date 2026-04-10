@@ -8,9 +8,10 @@ Restricciones modeladas:
     R2 — Cobertura total: cada turno cubierto por exactamente un asesor por día.
     R3 — Consistencia semanal: el asesor mantiene el mismo turno toda la semana.
     R4 — Solo días hábiles: se excluyen domingos y festivos colombianos.
-    R5 — (opcional) Rotación semanal: turno distinto en semanas consecutivas.
-    R6 — (opcional) Turno fijo para asesor_fijo: solo puede tener APERTURA.
-    R7 — (requiere R6) Los otros dos asesores rotan entre CIERRE e INTERMEDIO
+    R5 — (automática cuando semanas > 1) Rotación semanal: turno distinto en
+         semanas consecutivas.
+    R6 — (opcional) Turno fijo para asesor_fijo: solo puede tener ``turno_fijo``.
+    R7 — (requiere R6) Los otros dos asesores rotan entre los turnos restantes
          en semanas consecutivas.
 """
 
@@ -28,13 +29,6 @@ from ortools.sat.python import cp_model
 
 TURNOS: list[str] = ["APERTURA", "INTERMEDIO", "CIERRE"]
 """Lista de los tres tipos de turno disponibles en el PDV."""
-
-ASESORES: list[str] = ["Asesor_1", "Asesor_2", "Asesor_3"]
-"""Lista de los tres asesores del punto de venta."""
-
-_TURNO_APERTURA_IDX: int = TURNOS.index("APERTURA")
-_TURNO_INTERMEDIO_IDX: int = TURNOS.index("INTERMEDIO")
-_TURNO_CIERRE_IDX: int = TURNOS.index("CIERRE")
 
 # Nombres de días en español para el DataFrame final
 _DIAS_ES: dict[int, str] = {
@@ -151,102 +145,180 @@ class PDVScheduler:
     la definición de variables booleanas, la adición de restricciones duras
     y la resolución del problema de asignación de turnos.
 
+    La fecha de fin del período se calcula internamente a partir de
+    ``fecha_inicio`` y ``semanas``. La rotación semanal (R5) se activa
+    de forma automática cuando ``semanas > 1``.
+
     Args:
+        asesores: Lista con los nombres de los asesores del PDV. Debe
+            contener exactamente tantos asesores como turnos hay en ``TURNOS``
+            (por defecto, 3).
         fecha_inicio: Primer día del período de planificación.
-        fecha_fin: Último día del período de planificación.
-        aplicar_rotacion: Si ``True``, activa la rotación semanal (R5).
+        semanas: Número de semanas a planificar. Determina ``fecha_fin``
+            internamente como ``fecha_inicio + timedelta(weeks=semanas) - 1 día``.
+            Por defecto 1.
         aplicar_restriccion_asesor_fijo: Si ``True``, activa el turno fijo
-            para ``asesor_fijo`` (R6) y la rotación CIERRE/INTERMEDIO
-            para los demás (R7).
-        asesor_fijo: Nombre del asesor que tendrá APERTURA fija. Obligatorio
+            para ``asesor_fijo`` (R6) y la rotación binaria de los asesores
+            libres (R7).
+        asesor_fijo: Nombre del asesor que tendrá el turno fijo. Obligatorio
             cuando ``aplicar_restriccion_asesor_fijo=True``.
+        turno_fijo: Nombre del turno que se asignará de forma fija al
+            ``asesor_fijo``. Por defecto ``"APERTURA"``.
 
     Raises:
-        TypeError: Si las fechas no son instancias de ``datetime.date``.
-        ValueError: Si ``asesor_fijo`` no existe en ``ASESORES``, si no hay
-            días hábiles en el rango, o si el período no contiene semanas
-            válidas.
+        TypeError: Si ``fecha_inicio`` no es instancia de ``datetime.date``.
+        ValueError: Si ``asesores`` está vacío o su longitud no coincide con
+            ``TURNOS``, si ``turno_fijo`` no existe en ``TURNOS``, si
+            ``semanas`` es menor que 1, si ``asesor_fijo`` no existe en
+            ``asesores`` cuando R6 está activa, o si no hay días hábiles
+            en el rango calculado.
         RuntimeError: Si el solver CP-SAT no encuentra solución al llamar
             a :meth:`resolver`.
+
+    Example::
+
+        scheduler = PDVScheduler(
+            asesores=["Ana", "Luis", "María"],
+            fecha_inicio=date(2025, 1, 6),
+            semanas=2,
+            aplicar_restriccion_asesor_fijo=True,
+            asesor_fijo="Ana",
+            turno_fijo="APERTURA",
+        )
+        estado = scheduler.resolver()
+        df = scheduler.obtener_dataframe()
     """
 
     def __init__(
         self,
+        asesores: list[str],
         fecha_inicio: date,
-        fecha_fin: date,
-        aplicar_rotacion: bool = False,
+        semanas: int = 1,
         aplicar_restriccion_asesor_fijo: bool = False,
         asesor_fijo: str | None = None,
+        turno_fijo: str = "APERTURA",
     ) -> None:
         """
         Inicializa el planificador, valida los parámetros y construye
         el modelo CP-SAT completo (variables + restricciones).
 
         Args:
+            asesores: Lista de nombres de asesores. Debe tener la misma
+                longitud que ``TURNOS``.
             fecha_inicio: Primer día del período (inclusive).
-            fecha_fin: Último día del período (inclusive).
-            aplicar_rotacion: Activa la rotación semanal entre semanas (R5).
+            semanas: Cantidad de semanas a planificar (mínimo 1).
             aplicar_restriccion_asesor_fijo: Activa el turno fijo (R6) y la
-                rotación binaria de los asesores libres (R7).
-            asesor_fijo: Nombre del asesor con turno APERTURA fijo. Requerido
+                rotación binaria de asesores libres (R7).
+            asesor_fijo: Nombre del asesor con turno fijo. Requerido
                 si ``aplicar_restriccion_asesor_fijo=True``.
+            turno_fijo: Nombre del turno asignado fijo al ``asesor_fijo``.
 
         Raises:
-            ValueError: Si ``aplicar_restriccion_asesor_fijo`` es ``True`` y
-                ``asesor_fijo`` es ``None`` o no existe en ``ASESORES``.
-            ValueError: Si no hay días hábiles en el rango o el período no
-                contiene semanas válidas.
+            TypeError: Si ``fecha_inicio`` no es instancia de ``datetime.date``.
+            ValueError: En cualquiera de las siguientes condiciones:
+                - ``asesores`` es una lista vacía.
+                - ``len(asesores) != len(TURNOS)``.
+                - ``turno_fijo`` no pertenece a ``TURNOS``.
+                - ``semanas`` es menor que 1.
+                - ``aplicar_restriccion_asesor_fijo=True`` y ``asesor_fijo``
+                  es ``None`` o no existe en ``asesores``.
+                - No hay días hábiles en el rango calculado.
         """
-        # ── Validación de parámetros de asesor fijo ──────────────────────────
+        # ── Validación de tipos ───────────────────────────────────────────────
+        if not isinstance(fecha_inicio, date):
+            raise TypeError(
+                f"'fecha_inicio' debe ser instancia de datetime.date, "
+                f"se recibió {type(fecha_inicio).__name__}."
+            )
+
+        # ── Validación de asesores ────────────────────────────────────────────
+        if not asesores:
+            raise ValueError(
+                "La lista 'asesores' no puede estar vacía."
+            )
+
+        if len(asesores) != len(TURNOS):
+            raise ValueError(
+                f"La lista 'asesores' debe tener exactamente {len(TURNOS)} "
+                f"elementos (uno por turno), pero se recibieron {len(asesores)}: "
+                f"{asesores}."
+            )
+
+        # ── Validación de turno_fijo ──────────────────────────────────────────
+        if turno_fijo not in TURNOS:
+            raise ValueError(
+                f"El turno_fijo '{turno_fijo}' no es válido. "
+                f"Debe ser uno de {TURNOS}."
+            )
+
+        # ── Validación de semanas ─────────────────────────────────────────────
+        if not isinstance(semanas, int) or semanas < 1:
+            raise ValueError(
+                f"'semanas' debe ser un entero mayor o igual a 1, "
+                f"se recibió: {semanas!r}."
+            )
+
+        # ── Validación de asesor fijo ─────────────────────────────────────────
         if aplicar_restriccion_asesor_fijo:
             if asesor_fijo is None:
                 raise ValueError(
                     "Debe especificar 'asesor_fijo' cuando "
                     "'aplicar_restriccion_asesor_fijo' es True."
                 )
-            if asesor_fijo not in ASESORES:
+            if asesor_fijo not in asesores:
                 raise ValueError(
                     f"El asesor '{asesor_fijo}' no existe en la lista de asesores "
-                    f"registrados: {ASESORES}. Verifique el nombre exacto."
+                    f"proporcionada: {asesores}. Verifique el nombre exacto."
                 )
 
-        self.fecha_inicio = fecha_inicio
-        self.fecha_fin = fecha_fin
-        self.aplicar_rotacion = aplicar_rotacion
-        self.aplicar_restriccion_asesor_fijo = aplicar_restriccion_asesor_fijo
-        self.asesor_fijo = asesor_fijo
+        # ── Asignación de atributos públicos ──────────────────────────────────
+        self.asesores: list[str] = asesores
+        self.fecha_inicio: date = fecha_inicio
+        self.num_semanas: int = semanas
+        self.fecha_fin: date = fecha_inicio + timedelta(weeks=semanas) - timedelta(days=1)
+        self.aplicar_rotacion: bool = semanas > 1  # R5 automática
+        self.aplicar_restriccion_asesor_fijo: bool = aplicar_restriccion_asesor_fijo
+        self.asesor_fijo: str | None = asesor_fijo
+        self.turno_fijo: str = turno_fijo
 
-        # Índice dinámico del asesor fijo (None si R6 no aplica)
+        # ── Índices dinámicos derivados de los parámetros ────────────────────
+        self._turno_fijo_idx: int = TURNOS.index(turno_fijo)
+
+        # Turnos que rotan en R7 (los dos que NO son el turno fijo)
+        self._turnos_libres_idx: list[int] = [
+            i for i in range(len(TURNOS)) if i != self._turno_fijo_idx
+        ]
+
+        # Índice del asesor fijo (None si R6 no aplica)
         self._asesor_fijo_idx: int | None = (
-            ASESORES.index(asesor_fijo)
+            asesores.index(asesor_fijo)
             if asesor_fijo is not None
             else None
         )
 
-        # ── Cálculo de días y semanas hábiles ────────────────────────────────
+        # ── Cálculo de días y semanas hábiles ─────────────────────────────────
         self.dias_habiles: list[date] = calcular_dias_habiles(
-            fecha_inicio, fecha_fin
+            self.fecha_inicio, self.fecha_fin
         )
 
         if not self.dias_habiles:
             raise ValueError(
-                f"No existen días hábiles entre {fecha_inicio} y {fecha_fin}. "
-                "Verifique que el rango no corresponda exclusivamente a domingos "
-                "y/o festivos colombianos."
+                f"No existen días hábiles entre {self.fecha_inicio} y "
+                f"{self.fecha_fin}. Verifique que el rango no corresponda "
+                "exclusivamente a domingos y/o festivos colombianos."
             )
 
         self.semanas: dict[int, list[date]] = _agrupar_por_semana(
             self.dias_habiles
         )
 
-        # ── Validación defensiva de semanas ──────────────────────────────────
-        if len(self.semanas) <= 0:
+        if len(self.semanas) < 1:
             raise ValueError(
                 "El período de planificación no contiene semanas válidas. "
                 "Amplíe el rango de fechas."
             )
 
-        # ── Inicialización del modelo CP-SAT ─────────────────────────────────
+        # ── Inicialización del modelo CP-SAT ──────────────────────────────────
         self._modelo: cp_model.CpModel = cp_model.CpModel()
         self._solver: cp_model.CpSolver = cp_model.CpSolver()
         self._vars: dict[tuple[int, date, int], cp_model.IntVar] = {}
@@ -266,13 +338,13 @@ class PDVScheduler:
 
         Para cada tripleta (asesor ``a``, día hábil ``d``, turno ``t``) define
         una variable booleana que vale 1 cuando el asesor trabaja ese turno
-        en ese día.
+        en ese día. Usa ``self.asesores`` en lugar de la constante global.
 
         Raises:
             RuntimeError: Si ocurre un error al crear variables del modelo.
         """
         try:
-            for a_idx in range(len(ASESORES)):
+            for a_idx in range(len(self.asesores)):
                 for dia in self.dias_habiles:
                     for t_idx in range(len(TURNOS)):
                         nombre_var = f"turno_a{a_idx}_d{dia}_t{t_idx}"
@@ -290,7 +362,7 @@ class PDVScheduler:
 
         Orden de aplicación:
             1. R1, R2, R3 — siempre activas.
-            2. R5 — si ``aplicar_rotacion=True``.
+            2. R5 — si ``aplicar_rotacion=True`` (automático cuando ``semanas > 1``).
             3. R6 + R7 — si ``aplicar_restriccion_asesor_fijo=True``.
 
         Raises:
@@ -325,7 +397,7 @@ class PDVScheduler:
             RuntimeError: Si ocurre un error al agregar la restricción.
         """
         try:
-            for a_idx in range(len(ASESORES)):
+            for a_idx in range(len(self.asesores)):
                 for dia in self.dias_habiles:
                     self._modelo.add_exactly_one(
                         self._vars[(a_idx, dia, t_idx)]
@@ -348,7 +420,7 @@ class PDVScheduler:
                 for dia in self.dias_habiles:
                     self._modelo.add_exactly_one(
                         self._vars[(a_idx, dia, t_idx)]
-                        for a_idx in range(len(ASESORES))
+                        for a_idx in range(len(self.asesores))
                     )
         except Exception as exc:
             raise RuntimeError(
@@ -378,7 +450,7 @@ class PDVScheduler:
                 dia_ref = dias_semana[0]
 
                 for dia in dias_semana[1:]:
-                    for a_idx in range(len(ASESORES)):
+                    for a_idx in range(len(self.asesores)):
                         for t_idx in range(len(TURNOS)):
                             self._modelo.add(
                                 self._vars[(a_idx, dia, t_idx)]
@@ -397,21 +469,18 @@ class PDVScheduler:
         """
         R5 — Un asesor no puede repetir el mismo turno en semanas consecutivas.
 
-        Diseño y relación con R3:
-            Esta restricción compara el ``dia_ref`` (primer día hábil) de cada
-            semana con el ``dia_ref`` de la semana siguiente. Usar el día
-            representante es correcto y suficiente porque R3 garantiza que
-            todos los días de una semana tienen el mismo valor de turno.
-            Por tanto, ``dia_ref_W != dia_ref_{W+1}`` implica
-            ``semana_W != semana_{W+1}`` para el asesor completo.
+        Se activa automáticamente cuando ``semanas > 1``. Esta restricción
+        compara el ``dia_ref`` (primer día hábil) de cada semana con el de la
+        siguiente, lo cual es correcto y suficiente porque R3 garantiza
+        uniformidad dentro de cada semana.
 
         Exclusión del asesor fijo:
-            Si R6 está activa, el asesor fijo siempre tiene APERTURA, por lo
-            que no puede rotar. Se omite para evitar infeasibility.
+            Si R6 está activa, el asesor fijo siempre tiene ``turno_fijo``,
+            por lo que no puede rotar. Se omite para evitar infeasibility.
 
         Implementación:
-            Para cada par de semanas consecutivas (W, W+1) y para cada asesor
-            libre, se añade:
+            Para cada par de semanas consecutivas (W, W+1) y asesor libre::
+
                 vars[a, dia_ref_W, t] + vars[a, dia_ref_{W+1}, t] <= 1
 
         Raises:
@@ -427,8 +496,8 @@ class PDVScheduler:
                 dia_ref_actual = self.semanas[sem_actual][0]
                 dia_ref_siguiente = self.semanas[sem_siguiente][0]
 
-                for a_idx in range(len(ASESORES)):
-                    # Excluir asesor fijo: siempre tendrá APERTURA (R6)
+                for a_idx in range(len(self.asesores)):
+                    # Excluir asesor fijo: siempre tendrá turno_fijo (R6)
                     if (
                         self.aplicar_restriccion_asesor_fijo
                         and a_idx == self._asesor_fijo_idx
@@ -448,11 +517,15 @@ class PDVScheduler:
 
     def _r6_turno_fijo_asesor(self) -> None:
         """
-        R6 — El asesor designado solo puede trabajar en turno APERTURA.
+        R6 — El asesor designado solo puede trabajar en el turno ``turno_fijo``.
 
-        Fuerza la variable ``vars[asesor_fijo_idx, dia, APERTURA_IDX] = 1``
-        para todos los días hábiles del período. Combinado con R1 y R2,
-        esto asegura que los otros dos asesores cubran CIERRE e INTERMEDIO.
+        Fuerza la variable ``vars[asesor_fijo_idx, dia, turno_fijo_idx] = 1``
+        para todos los días hábiles del período. Combinado con R1 y R2, esto
+        garantiza que los otros dos asesores cubran los turnos restantes.
+
+        El índice del turno se obtiene de ``self._turno_fijo_idx``, que fue
+        calculado dinámicamente a partir del parámetro ``turno_fijo``, sin
+        depender de ninguna constante hardcodeada.
 
         Precondición:
             ``self._asesor_fijo_idx`` no puede ser ``None`` al invocar este
@@ -465,7 +538,7 @@ class PDVScheduler:
             for dia in self.dias_habiles:
                 self._modelo.add(
                     self._vars[
-                        (self._asesor_fijo_idx, dia, _TURNO_APERTURA_IDX)
+                        (self._asesor_fijo_idx, dia, self._turno_fijo_idx)
                     ] == 1
                 )
         except Exception as exc:
@@ -475,29 +548,22 @@ class PDVScheduler:
 
     def _r7_rotacion_asesores_libres(self) -> None:
         """
-        R7 — Con R6 activa, los dos asesores libres rotan entre CIERRE e
-        INTERMEDIO en semanas consecutivas.
+        R7 — Con R6 activa, los dos asesores libres rotan entre los dos turnos
+        restantes (aquellos que no son ``turno_fijo``) en semanas consecutivas.
 
-        Diseño:
-            Dado que R6 fija APERTURA al asesor designado y R2 garantiza
-            cobertura total, los dos asesores libres solo pueden tener
-            CIERRE o INTERMEDIO. R7 hace obligatorio el intercambio:
-            si el asesor libre X tiene CIERRE en la semana W, entonces
-            en la semana W+1 debe tener INTERMEDIO, y viceversa.
+        Diseño generalizado:
+            Los dos índices de turno que rotan están en ``self._turnos_libres_idx``,
+            calculados dinámicamente como los índices de ``TURNOS`` distintos a
+            ``self._turno_fijo_idx``. Esto permite que R7 funcione correctamente
+            sin importar qué valor tenga ``turno_fijo``.
 
-        Implementación (por cada par de semanas consecutivas y asesor libre):
-            vars[a, dia_ref_{W+1}, INTERMEDIO] == vars[a, dia_ref_W, CIERRE]
-            vars[a, dia_ref_{W+1}, CIERRE]     == vars[a, dia_ref_W, INTERMEDIO]
+        Implementación (por cada par de semanas consecutivas y asesor libre)::
 
-        Estas dos ecuaciones juntas fuerzan el swap: la variable del turno en
-        la semana siguiente es igual a la variable del turno complementario en
-        la semana actual.
+            vars[a, dia_ref_{W+1}, turno_libre_0] == vars[a, dia_ref_W, turno_libre_1]
+            vars[a, dia_ref_{W+1}, turno_libre_1] == vars[a, dia_ref_W, turno_libre_0]
 
-        Relación con R5:
-            R7 implica la no-repetición de R5 para CIERRE/INTERMEDIO. Si R5
-            también está activa, sus restricciones sobre APERTURA para asesores
-            libres son trivialmente satisfechas (variables siempre 0 por R2+R6).
-            No existe contradicción entre R5 y R7.
+        Estas dos ecuaciones fuerzan el swap: la asignación de turno en la
+        semana siguiente es igual a la del turno complementario en la semana actual.
 
         Nota:
             Si el período tiene solo 1 semana, no hay semanas consecutivas y
@@ -510,14 +576,16 @@ class PDVScheduler:
             semana_keys = sorted(self.semanas.keys())
 
             if len(semana_keys) < 2:
-                # Sin semanas consecutivas no hay rotación que imponer
                 return
 
             asesores_libres: list[int] = [
                 a_idx
-                for a_idx in range(len(ASESORES))
+                for a_idx in range(len(self.asesores))
                 if a_idx != self._asesor_fijo_idx
             ]
+
+            # Desempaquetar los dos índices de turno que rotan
+            t_libre_0, t_libre_1 = self._turnos_libres_idx
 
             for i in range(len(semana_keys) - 1):
                 sem_actual = semana_keys[i]
@@ -527,23 +595,15 @@ class PDVScheduler:
                 dia_ref_siguiente = self.semanas[sem_siguiente][0]
 
                 for a_idx in asesores_libres:
-                    # Semana W tiene CIERRE → semana W+1 debe tener INTERMEDIO
+                    # Semana W tiene t_libre_0 → semana W+1 debe tener t_libre_1
                     self._modelo.add(
-                        self._vars[
-                            (a_idx, dia_ref_siguiente, _TURNO_INTERMEDIO_IDX)
-                        ]
-                        == self._vars[
-                            (a_idx, dia_ref_actual, _TURNO_CIERRE_IDX)
-                        ]
+                        self._vars[(a_idx, dia_ref_siguiente, t_libre_1)]
+                        == self._vars[(a_idx, dia_ref_actual, t_libre_0)]
                     )
-                    # Semana W tiene INTERMEDIO → semana W+1 debe tener CIERRE
+                    # Semana W tiene t_libre_1 → semana W+1 debe tener t_libre_0
                     self._modelo.add(
-                        self._vars[
-                            (a_idx, dia_ref_siguiente, _TURNO_CIERRE_IDX)
-                        ]
-                        == self._vars[
-                            (a_idx, dia_ref_actual, _TURNO_INTERMEDIO_IDX)
-                        ]
+                        self._vars[(a_idx, dia_ref_siguiente, t_libre_0)]
+                        == self._vars[(a_idx, dia_ref_actual, t_libre_1)]
                     )
         except Exception as exc:
             raise RuntimeError(
@@ -591,10 +651,11 @@ class PDVScheduler:
     def obtener_dataframe(self) -> pd.DataFrame:
         """
         Retorna el DataFrame de planificación con columnas:
-        Semana, Fecha, Día y una columna por asesor.
+        Semana, Fecha, Día y una columna por cada asesor en ``self.asesores``.
 
         Returns:
-            ``pd.DataFrame`` con la planificación completa.
+            ``pd.DataFrame`` con la planificación completa. Las columnas de
+            asesores respetan el orden de ``self.asesores``.
 
         Raises:
             RuntimeError: Si no existe una solución válida para exportar.
@@ -608,7 +669,8 @@ class PDVScheduler:
         y asesores como columnas.
 
         Returns:
-            ``pd.DataFrame`` pivoteado.
+            ``pd.DataFrame`` indexado por ``Fecha``, con una columna por
+            cada asesor en ``self.asesores``.
 
         Raises:
             RuntimeError: Si no existe una solución válida para exportar.
@@ -616,7 +678,7 @@ class PDVScheduler:
         df = self.obtener_dataframe()
 
         try:
-            pivot = df.set_index("Fecha")[ASESORES].copy()
+            pivot = df.set_index("Fecha")[self.asesores].copy()
             pivot.index.name = "Fecha"
             return pivot
         except Exception as exc:
@@ -627,6 +689,10 @@ class PDVScheduler:
     def _construir_dataframe(self) -> pd.DataFrame:
         """
         Construye el DataFrame de planificación a partir de la solución del solver.
+
+        Usa ``self.asesores`` para los nombres de columna, en lugar de la
+        constante global ``ASESORES``, de modo que el resultado es correcto
+        con cualquier lista de asesores pasada al constructor.
 
         Returns:
             DataFrame con una fila por cada día hábil del período planificado.
@@ -653,7 +719,7 @@ class PDVScheduler:
                         ),
                     }
 
-                    for a_idx, asesor in enumerate(ASESORES):
+                    for a_idx, asesor in enumerate(self.asesores):
                         turno_asignado = "N/A"
                         for t_idx, turno in enumerate(TURNOS):
                             if (
@@ -669,7 +735,7 @@ class PDVScheduler:
 
             return pd.DataFrame(
                 filas,
-                columns=["Semana", "Fecha", "Día"] + ASESORES,
+                columns=["Semana", "Fecha", "Día"] + self.asesores,
             )
         except Exception as exc:
             raise RuntimeError(
@@ -715,3 +781,125 @@ class PDVScheduler:
         if self._status is None:
             return None
         return self._solver.status_name(self._status)
+
+    @property
+    def periodo(self) -> str:
+        """
+        Retorna una cadena descriptiva del período planificado.
+
+        Example::
+
+            "2025-01-06 → 2025-01-19 (2 semanas, 10 días hábiles)"
+        """
+        return (
+            f"{self.fecha_inicio} → {self.fecha_fin} "
+            f"({self.num_semanas} semana(s), "
+            f"{len(self.dias_habiles)} días hábiles)"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bloque de prueba
+# ─────────────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    """
+    Prueba la clase PDVScheduler con dos escenarios reales:
+        1. Una semana sin restricción de asesor fijo.
+        2. Dos semanas con asesor fijo en APERTURA (R6 + R7 activas).
+    """
+
+    ASESORES_PRUEBA = ["Ana", "Luis", "María"]
+    FECHA_BASE = date(2025, 1, 6)  # Lunes 6 de enero de 2025
+
+    # ── Escenario 1: 1 semana, sin asesor fijo ────────────────────────────────
+    print("=" * 60)
+    print("ESCENARIO 1 — 1 semana, sin asesor fijo")
+    print("=" * 60)
+
+    try:
+        scheduler_1 = PDVScheduler(
+            asesores=ASESORES_PRUEBA,
+            fecha_inicio=FECHA_BASE,
+            semanas=1,
+        )
+        print(f"Período: {scheduler_1.periodo}")
+        print(f"Rotación automática activa: {scheduler_1.aplicar_rotacion}")
+
+        estado_1 = scheduler_1.resolver()
+        print(f"Estado solver: {estado_1}")
+
+        if estado_1 in ("OPTIMAL", "FEASIBLE"):
+            print(scheduler_1.obtener_dataframe().to_string(index=False))
+    except (TypeError, ValueError, RuntimeError) as e:
+        print(f"[ERROR] {e}")
+
+    # ── Escenario 2: 2 semanas, con asesor fijo en APERTURA ───────────────────
+    print()
+    print("=" * 60)
+    print("ESCENARIO 2 — 2 semanas, Ana fija en APERTURA (R6 + R7)")
+    print("=" * 60)
+
+    try:
+        scheduler_2 = PDVScheduler(
+            asesores=ASESORES_PRUEBA,
+            fecha_inicio=FECHA_BASE,
+            semanas=2,
+            aplicar_restriccion_asesor_fijo=True,
+            asesor_fijo="Ana",
+            turno_fijo="APERTURA",
+        )
+        print(f"Período: {scheduler_2.periodo}")
+        print(f"Rotación automática activa: {scheduler_2.aplicar_rotacion}")
+        print(f"Turnos libres que rotan: {[TURNOS[i] for i in scheduler_2._turnos_libres_idx]}")
+
+        estado_2 = scheduler_2.resolver()
+        print(f"Estado solver: {estado_2}")
+
+        if estado_2 in ("OPTIMAL", "FEASIBLE"):
+            print(scheduler_2.obtener_dataframe().to_string(index=False))
+            print("\nPivot:")
+            print(scheduler_2.obtener_dataframe_pivot().to_string())
+    except (TypeError, ValueError, RuntimeError) as e:
+        print(f"[ERROR] {e}")
+
+    # ── Escenario 3: Validación de errores esperados ───────────────────────────
+    print()
+    print("=" * 60)
+    print("ESCENARIO 3 — Validaciones de errores")
+    print("=" * 60)
+
+    casos_error = [
+        {
+            "desc": "asesores vacíos",
+            "kwargs": {"asesores": [], "fecha_inicio": FECHA_BASE},
+        },
+        {
+            "desc": "turno_fijo inválido",
+            "kwargs": {
+                "asesores": ASESORES_PRUEBA,
+                "fecha_inicio": FECHA_BASE,
+                "turno_fijo": "NOCTURNO",
+            },
+        },
+        {
+            "desc": "asesor_fijo no en lista",
+            "kwargs": {
+                "asesores": ASESORES_PRUEBA,
+                "fecha_inicio": FECHA_BASE,
+                "aplicar_restriccion_asesor_fijo": True,
+                "asesor_fijo": "Pedro",
+            },
+        },
+        {
+            "desc": "semanas < 1",
+            "kwargs": {"asesores": ASESORES_PRUEBA, "fecha_inicio": FECHA_BASE, "semanas": 0},
+        },
+    ]
+
+    for caso in casos_error:
+        try:
+            PDVScheduler(**caso["kwargs"])
+            print(f"  [{caso['desc']}] → Sin error (inesperado)")
+        except (TypeError, ValueError) as e:
+            print(f"  [{caso['desc']}] → OK: {e}")

@@ -59,6 +59,13 @@ def planificar():
             fecha_inicio = date.fromisoformat(fecha_inicio_str)
         except ValueError:
             raise ValueError(f"La fecha '{fecha_inicio_str}' no tiene un formato válido (YYYY-MM-DD).")
+        
+        if fecha_inicio.weekday() != 0:
+            nombre_dia = ["lunes","martes","miércoles","jueves","viernes","sábado","domingo"][fecha_inicio.weekday()]
+            raise ValueError(
+                f"La fecha de inicio debe ser un lunes. "
+                f"'{fecha_inicio.strftime('%d/%m/%Y')}' es {nombre_dia}."
+            )
 
         if semanas_str not in ("1", "4"):
             raise ValueError("El número de semanas debe ser 1 o 4.")
@@ -148,4 +155,6 @@ def planificar():
 # ─── Punto de entrada ─────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    import os
+    debug = os.getenv("FLASK_DEBUG", "false").lower() == "true"
+    app.run(debug=debug)

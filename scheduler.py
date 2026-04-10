@@ -1,6 +1,4 @@
 """
-scheduler.py — PDV Scheduler
-
 Módulo principal de planificación de turnos para un Punto de Venta.
 Implementa la clase PDVScheduler usando OR-Tools CP-SAT para resolver
 la asignación óptima de turnos respetando todas las restricciones del negocio.

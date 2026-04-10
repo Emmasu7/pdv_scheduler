@@ -8,8 +8,10 @@ Restricciones modeladas:
     R2 — Cobertura total: cada turno cubierto por exactamente un asesor por día.
     R3 — Consistencia semanal: el asesor mantiene el mismo turno toda la semana.
     R4 — Solo días hábiles: se excluyen domingos y festivos colombianos.
-    R5 — (opcional) Turno fijo para Asesor_1: solo puede tener APERTURA.
-    R6 — (opcional) Rotación semanal: turno distinto en semanas consecutivas.
+    R5 — (opcional) Rotación semanal: turno distinto en semanas consecutivas.
+    R6 — (opcional) Turno fijo para asesor_fijo: solo puede tener APERTURA.
+    R7 — (requiere R6) Los otros dos asesores rotan entre CIERRE e INTERMEDIO
+         en semanas consecutivas.
 """
 
 from __future__ import annotations
@@ -30,9 +32,9 @@ TURNOS: list[str] = ["APERTURA", "INTERMEDIO", "CIERRE"]
 ASESORES: list[str] = ["Asesor_1", "Asesor_2", "Asesor_3"]
 """Lista de los tres asesores del punto de venta."""
 
-# Índices para la restricción especial R5
-_ASESOR_FIJO_IDX: int = 0
-_TURNO_FIJO_IDX: int = TURNOS.index("APERTURA")
+_TURNO_APERTURA_IDX: int = TURNOS.index("APERTURA")
+_TURNO_INTERMEDIO_IDX: int = TURNOS.index("INTERMEDIO")
+_TURNO_CIERRE_IDX: int = TURNOS.index("CIERRE")
 
 # Nombres de días en español para el DataFrame final
 _DIAS_ES: dict[int, str] = {
@@ -58,7 +60,7 @@ def calcular_dias_habiles(
 
     Un día es hábil si cumple ambas condiciones:
         - No es domingo (weekday() != 6).
-        - No es festivo colombiano según la librería `holidays`.
+        - No es festivo colombiano según la librería ``holidays``.
 
     Args:
         fecha_inicio: Primer día del período de planificación (inclusive).
@@ -152,12 +154,18 @@ class PDVScheduler:
     Args:
         fecha_inicio: Primer día del período de planificación.
         fecha_fin: Último día del período de planificación.
-        aplicar_r5: Si ``True``, Asesor_1 solo puede tener turno APERTURA.
-        aplicar_rotacion: Si ``True``, activa la rotación semanal (R6).
+        aplicar_rotacion: Si ``True``, activa la rotación semanal (R5).
+        aplicar_restriccion_asesor_fijo: Si ``True``, activa el turno fijo
+            para ``asesor_fijo`` (R6) y la rotación CIERRE/INTERMEDIO
+            para los demás (R7).
+        asesor_fijo: Nombre del asesor que tendrá APERTURA fija. Obligatorio
+            cuando ``aplicar_restriccion_asesor_fijo=True``.
 
     Raises:
         TypeError: Si las fechas no son instancias de ``datetime.date``.
-        ValueError: Si no existen días hábiles en el rango especificado.
+        ValueError: Si ``asesor_fijo`` no existe en ``ASESORES``, si no hay
+            días hábiles en el rango, o si el período no contiene semanas
+            válidas.
         RuntimeError: Si el solver CP-SAT no encuentra solución al llamar
             a :meth:`resolver`.
     """
@@ -166,29 +174,59 @@ class PDVScheduler:
         self,
         fecha_inicio: date,
         fecha_fin: date,
-        aplicar_r5: bool = False,
         aplicar_rotacion: bool = False,
+        aplicar_restriccion_asesor_fijo: bool = False,
+        asesor_fijo: str | None = None,
     ) -> None:
         """
-        Inicializa el planificador, valida el rango de fechas y construye
+        Inicializa el planificador, valida los parámetros y construye
         el modelo CP-SAT completo (variables + restricciones).
 
         Args:
             fecha_inicio: Primer día del período (inclusive).
             fecha_fin: Último día del período (inclusive).
-            aplicar_r5: Activa la restricción de turno fijo para Asesor_1.
-            aplicar_rotacion: Activa la rotación semanal entre semanas (R6).
+            aplicar_rotacion: Activa la rotación semanal entre semanas (R5).
+            aplicar_restriccion_asesor_fijo: Activa el turno fijo (R6) y la
+                rotación binaria de los asesores libres (R7).
+            asesor_fijo: Nombre del asesor con turno APERTURA fijo. Requerido
+                si ``aplicar_restriccion_asesor_fijo=True``.
 
         Raises:
-            TypeError: Si las fechas no son instancias de ``datetime.date``.
-            ValueError: Si no hay días hábiles en el rango proporcionado.
+            ValueError: Si ``aplicar_restriccion_asesor_fijo`` es ``True`` y
+                ``asesor_fijo`` es ``None`` o no existe en ``ASESORES``.
+            ValueError: Si no hay días hábiles en el rango o el período no
+                contiene semanas válidas.
         """
+        # ── Validación de parámetros de asesor fijo ──────────────────────────
+        if aplicar_restriccion_asesor_fijo:
+            if asesor_fijo is None:
+                raise ValueError(
+                    "Debe especificar 'asesor_fijo' cuando "
+                    "'aplicar_restriccion_asesor_fijo' es True."
+                )
+            if asesor_fijo not in ASESORES:
+                raise ValueError(
+                    f"El asesor '{asesor_fijo}' no existe en la lista de asesores "
+                    f"registrados: {ASESORES}. Verifique el nombre exacto."
+                )
+
         self.fecha_inicio = fecha_inicio
         self.fecha_fin = fecha_fin
-        self.aplicar_r5 = aplicar_r5
         self.aplicar_rotacion = aplicar_rotacion
+        self.aplicar_restriccion_asesor_fijo = aplicar_restriccion_asesor_fijo
+        self.asesor_fijo = asesor_fijo
 
-        self.dias_habiles: list[date] = calcular_dias_habiles(fecha_inicio, fecha_fin)
+        # Índice dinámico del asesor fijo (None si R6 no aplica)
+        self._asesor_fijo_idx: int | None = (
+            ASESORES.index(asesor_fijo)
+            if asesor_fijo is not None
+            else None
+        )
+
+        # ── Cálculo de días y semanas hábiles ────────────────────────────────
+        self.dias_habiles: list[date] = calcular_dias_habiles(
+            fecha_inicio, fecha_fin
+        )
 
         if not self.dias_habiles:
             raise ValueError(
@@ -197,8 +235,18 @@ class PDVScheduler:
                 "y/o festivos colombianos."
             )
 
-        self.semanas: dict[int, list[date]] = _agrupar_por_semana(self.dias_habiles)
+        self.semanas: dict[int, list[date]] = _agrupar_por_semana(
+            self.dias_habiles
+        )
 
+        # ── Validación defensiva de semanas ──────────────────────────────────
+        if len(self.semanas) <= 0:
+            raise ValueError(
+                "El período de planificación no contiene semanas válidas. "
+                "Amplíe el rango de fechas."
+            )
+
+        # ── Inicialización del modelo CP-SAT ─────────────────────────────────
         self._modelo: cp_model.CpModel = cp_model.CpModel()
         self._solver: cp_model.CpSolver = cp_model.CpSolver()
         self._vars: dict[tuple[int, date, int], cp_model.IntVar] = {}
@@ -207,6 +255,10 @@ class PDVScheduler:
 
         self._crear_variables()
         self._agregar_restricciones()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Construcción del modelo
+    # ─────────────────────────────────────────────────────────────────────────
 
     def _crear_variables(self) -> None:
         """
@@ -234,7 +286,12 @@ class PDVScheduler:
 
     def _agregar_restricciones(self) -> None:
         """
-        Agrega al modelo todas las restricciones duras.
+        Agrega al modelo todas las restricciones duras en el orden correcto.
+
+        Orden de aplicación:
+            1. R1, R2, R3 — siempre activas.
+            2. R5 — si ``aplicar_rotacion=True``.
+            3. R6 + R7 — si ``aplicar_restriccion_asesor_fijo=True``.
 
         Raises:
             RuntimeError: Si ocurre un error agregando restricciones.
@@ -244,15 +301,21 @@ class PDVScheduler:
             self._r2_cobertura_total()
             self._r3_mismo_turno_semana()
 
-            if self.aplicar_r5:
-                self._r5_turno_fijo_asesor1()
-
             if self.aplicar_rotacion:
-                self._r6_rotacion_semanal()
+                self._r5_rotacion_semanal()
+
+            if self.aplicar_restriccion_asesor_fijo:
+                self._r6_turno_fijo_asesor()
+                self._r7_rotacion_asesores_libres()
+
         except Exception as exc:
             raise RuntimeError(
                 f"Error al agregar restricciones al modelo: {exc}"
             ) from exc
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Restricciones base (R1–R3)
+    # ─────────────────────────────────────────────────────────────────────────
 
     def _r1_un_turno_por_asesor(self) -> None:
         """
@@ -296,6 +359,14 @@ class PDVScheduler:
         """
         R3 — Consistencia semanal: el asesor mantiene el mismo turno toda la semana.
 
+        Implementación: se elige el primer día hábil de cada semana como
+        ``dia_ref`` y se fuerza que todos los días restantes de esa semana
+        tengan exactamente el mismo valor en cada variable de turno.
+
+        Nota de diseño: Esta restricción es la base sobre la que R5 opera
+        correctamente. R5 compara representantes semanales (``dia_ref``),
+        y R3 garantiza que esos representantes reflejen la semana completa.
+
         Raises:
             RuntimeError: Si ocurre un error al agregar la restricción.
         """
@@ -318,26 +389,30 @@ class PDVScheduler:
                 f"Error al agregar la restricción R3: {exc}"
             ) from exc
 
-    def _r5_turno_fijo_asesor1(self) -> None:
-        """
-        R5 — Asesor_1 solo puede trabajar en turno APERTURA.
+    # ─────────────────────────────────────────────────────────────────────────
+    # Restricciones opcionales (R5, R6, R7)
+    # ─────────────────────────────────────────────────────────────────────────
 
-        Raises:
-            RuntimeError: Si ocurre un error al agregar la restricción.
+    def _r5_rotacion_semanal(self) -> None:
         """
-        try:
-            for dia in self.dias_habiles:
-                self._modelo.add(
-                    self._vars[(_ASESOR_FIJO_IDX, dia, _TURNO_FIJO_IDX)] == 1
-                )
-        except Exception as exc:
-            raise RuntimeError(
-                f"Error al agregar la restricción R5: {exc}"
-            ) from exc
+        R5 — Un asesor no puede repetir el mismo turno en semanas consecutivas.
 
-    def _r6_rotacion_semanal(self) -> None:
-        """
-        R6 — Un asesor no puede repetir el mismo turno en semanas consecutivas.
+        Diseño y relación con R3:
+            Esta restricción compara el ``dia_ref`` (primer día hábil) de cada
+            semana con el ``dia_ref`` de la semana siguiente. Usar el día
+            representante es correcto y suficiente porque R3 garantiza que
+            todos los días de una semana tienen el mismo valor de turno.
+            Por tanto, ``dia_ref_W != dia_ref_{W+1}`` implica
+            ``semana_W != semana_{W+1}`` para el asesor completo.
+
+        Exclusión del asesor fijo:
+            Si R6 está activa, el asesor fijo siempre tiene APERTURA, por lo
+            que no puede rotar. Se omite para evitar infeasibility.
+
+        Implementación:
+            Para cada par de semanas consecutivas (W, W+1) y para cada asesor
+            libre, se añade:
+                vars[a, dia_ref_W, t] + vars[a, dia_ref_{W+1}, t] <= 1
 
         Raises:
             RuntimeError: Si ocurre un error al agregar la restricción.
@@ -353,7 +428,11 @@ class PDVScheduler:
                 dia_ref_siguiente = self.semanas[sem_siguiente][0]
 
                 for a_idx in range(len(ASESORES)):
-                    if self.aplicar_r5 and a_idx == _ASESOR_FIJO_IDX:
+                    # Excluir asesor fijo: siempre tendrá APERTURA (R6)
+                    if (
+                        self.aplicar_restriccion_asesor_fijo
+                        and a_idx == self._asesor_fijo_idx
+                    ):
                         continue
 
                     for t_idx in range(len(TURNOS)):
@@ -364,8 +443,116 @@ class PDVScheduler:
                         )
         except Exception as exc:
             raise RuntimeError(
+                f"Error al agregar la restricción R5: {exc}"
+            ) from exc
+
+    def _r6_turno_fijo_asesor(self) -> None:
+        """
+        R6 — El asesor designado solo puede trabajar en turno APERTURA.
+
+        Fuerza la variable ``vars[asesor_fijo_idx, dia, APERTURA_IDX] = 1``
+        para todos los días hábiles del período. Combinado con R1 y R2,
+        esto asegura que los otros dos asesores cubran CIERRE e INTERMEDIO.
+
+        Precondición:
+            ``self._asesor_fijo_idx`` no puede ser ``None`` al invocar este
+            método. El constructor valida esta condición.
+
+        Raises:
+            RuntimeError: Si ocurre un error al agregar la restricción.
+        """
+        try:
+            for dia in self.dias_habiles:
+                self._modelo.add(
+                    self._vars[
+                        (self._asesor_fijo_idx, dia, _TURNO_APERTURA_IDX)
+                    ] == 1
+                )
+        except Exception as exc:
+            raise RuntimeError(
                 f"Error al agregar la restricción R6: {exc}"
             ) from exc
+
+    def _r7_rotacion_asesores_libres(self) -> None:
+        """
+        R7 — Con R6 activa, los dos asesores libres rotan entre CIERRE e
+        INTERMEDIO en semanas consecutivas.
+
+        Diseño:
+            Dado que R6 fija APERTURA al asesor designado y R2 garantiza
+            cobertura total, los dos asesores libres solo pueden tener
+            CIERRE o INTERMEDIO. R7 hace obligatorio el intercambio:
+            si el asesor libre X tiene CIERRE en la semana W, entonces
+            en la semana W+1 debe tener INTERMEDIO, y viceversa.
+
+        Implementación (por cada par de semanas consecutivas y asesor libre):
+            vars[a, dia_ref_{W+1}, INTERMEDIO] == vars[a, dia_ref_W, CIERRE]
+            vars[a, dia_ref_{W+1}, CIERRE]     == vars[a, dia_ref_W, INTERMEDIO]
+
+        Estas dos ecuaciones juntas fuerzan el swap: la variable del turno en
+        la semana siguiente es igual a la variable del turno complementario en
+        la semana actual.
+
+        Relación con R5:
+            R7 implica la no-repetición de R5 para CIERRE/INTERMEDIO. Si R5
+            también está activa, sus restricciones sobre APERTURA para asesores
+            libres son trivialmente satisfechas (variables siempre 0 por R2+R6).
+            No existe contradicción entre R5 y R7.
+
+        Nota:
+            Si el período tiene solo 1 semana, no hay semanas consecutivas y
+            este método retorna sin añadir restricciones.
+
+        Raises:
+            RuntimeError: Si ocurre un error al agregar la restricción.
+        """
+        try:
+            semana_keys = sorted(self.semanas.keys())
+
+            if len(semana_keys) < 2:
+                # Sin semanas consecutivas no hay rotación que imponer
+                return
+
+            asesores_libres: list[int] = [
+                a_idx
+                for a_idx in range(len(ASESORES))
+                if a_idx != self._asesor_fijo_idx
+            ]
+
+            for i in range(len(semana_keys) - 1):
+                sem_actual = semana_keys[i]
+                sem_siguiente = semana_keys[i + 1]
+
+                dia_ref_actual = self.semanas[sem_actual][0]
+                dia_ref_siguiente = self.semanas[sem_siguiente][0]
+
+                for a_idx in asesores_libres:
+                    # Semana W tiene CIERRE → semana W+1 debe tener INTERMEDIO
+                    self._modelo.add(
+                        self._vars[
+                            (a_idx, dia_ref_siguiente, _TURNO_INTERMEDIO_IDX)
+                        ]
+                        == self._vars[
+                            (a_idx, dia_ref_actual, _TURNO_CIERRE_IDX)
+                        ]
+                    )
+                    # Semana W tiene INTERMEDIO → semana W+1 debe tener CIERRE
+                    self._modelo.add(
+                        self._vars[
+                            (a_idx, dia_ref_siguiente, _TURNO_CIERRE_IDX)
+                        ]
+                        == self._vars[
+                            (a_idx, dia_ref_actual, _TURNO_INTERMEDIO_IDX)
+                        ]
+                    )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Error al agregar la restricción R7: {exc}"
+            ) from exc
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Resolución y exportación
+    # ─────────────────────────────────────────────────────────────────────────
 
     def resolver(self) -> str:
         """
@@ -461,13 +648,19 @@ class PDVScheduler:
                     fila: dict = {
                         "Semana": sem_idx + 1,
                         "Fecha": dia.strftime("%Y-%m-%d"),
-                        "Día": _DIAS_ES.get(dia.weekday(), f"Día-{dia.weekday()}"),
+                        "Día": _DIAS_ES.get(
+                            dia.weekday(), f"Día-{dia.weekday()}"
+                        ),
                     }
 
                     for a_idx, asesor in enumerate(ASESORES):
                         turno_asignado = "N/A"
                         for t_idx, turno in enumerate(TURNOS):
-                            if self._solver.value(self._vars[(a_idx, dia, t_idx)]) == 1:
+                            if (
+                                self._solver.value(
+                                    self._vars[(a_idx, dia, t_idx)]
+                                ) == 1
+                            ):
                                 turno_asignado = turno
                                 break
                         fila[asesor] = turno_asignado
@@ -502,6 +695,10 @@ class PDVScheduler:
                 f"No existe solución válida para exportar. "
                 f"Estado del solver: '{nombre_estado}'."
             )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Propiedades de solo lectura
+    # ─────────────────────────────────────────────────────────────────────────
 
     @property
     def resultado(self) -> pd.DataFrame | None:

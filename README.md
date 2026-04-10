@@ -105,16 +105,46 @@ modelo.add_exactly_one(x[a, d, t] for t in range(len(TURNOS)))
 
 ### Restricciones implementadas (R1–R7)
 
-| ID | Nombre | Descripción | Activación |
-|----|--------|-------------|------------|
-| **R1** | Un turno por asesor por día | `add_exactly_one` sobre los turnos de un asesor en un día hábil. Impide asignaciones dobles. | Siempre |
+Resumen de activación:
 
-| **R2** | Cobertura total | `add_exactly_one` sobre los asesores para cada turno en cada día. Ningún turno queda vacío. | Siempre |
-| **R3** | Consistencia semanal | El asesor conserva el mismo turno toda la semana. Se fija un `dia_ref` (primer día hábil de la semana) y se igualan las variables del resto de días al representante. | Siempre |
-| **R4** | Solo días hábiles | Se excluyen domingos (`weekday() == 6`) y festivos colombianos detectados con `holidays.Colombia()`. No se crean variables para esos días. | Siempre |
-| **R5** | Rotación semanal | Un asesor no puede repetir el mismo turno en semanas consecutivas: `x[a, dia_ref_W, t] + x[a, dia_ref_{W+1}, t] <= 1`. `Asesor_1` se excluye de R5 cuando R6 está activa. | Automática cuando `semanas > 1` |
-| **R6** | Turno fijo para `Asesor_1` | Fuerza `x[Asesor_1, d, APERTURA] = 1` para todos los días hábiles. El solver redistribuye INTERMEDIO y CIERRE entre los demás. | Opcional (checkbox en el formulario) |
-| **R7** | Rotación binaria de asesores libres | `Asesor_2` y `Asesor_3` intercambian sus turnos (INTERMEDIO ↔ CIERRE) en semanas consecutivas. Requiere R6 activa. | Opcional (requiere R6) |
+| ID | Nombre | Activación |
+|----|--------|------------|
+| R1 | Un turno por asesor por día | Siempre |
+| R2 | Cobertura total | Siempre |
+| R3 | Consistencia semanal | Siempre |
+| R4 | Solo días hábiles | Siempre |
+| R5 | Rotación semanal | Automática cuando `semanas > 1` |
+| R6 | Turno fijo para `Asesor_1` | Opcional (checkbox en el formulario) |
+| R7 | Rotación binaria de asesores libres | Opcional (requiere R6) |
+
+**R1 — Un turno por asesor por día**  
+Usa `add_exactly_one` sobre los turnos de un asesor en un día hábil. Impide que un asesor tenga dos turnos al mismo tiempo.
+
+**R2 — Cobertura total**  
+Usa `add_exactly_one` sobre los asesores para cada turno en cada día. Ningún turno queda sin cubrir.
+
+**R3 — Consistencia semanal**  
+El asesor conserva el mismo turno toda la semana. Se fija un `dia_ref` (primer día hábil de la semana) y se igualan las variables del resto de días al representante.
+
+**R4 — Solo días hábiles**  
+Se excluyen domingos (`weekday() == 6`) y festivos colombianos detectados con `holidays.Colombia()`. No se crean variables para esos días.
+
+**R5 — Rotación semanal**  
+Un asesor no puede repetir el mismo turno en semanas consecutivas:
+
+```python
+x[a, dia_ref_W, t] + x[a, dia_ref_{W+1}, t] <= 1
+```
+
+`Asesor_1` se excluye de R5 cuando R6 está activa para evitar infeasibility.
+
+**R6 — Turno fijo para `Asesor_1`**  
+Fuerza `x[Asesor_1, d, APERTURA] = 1` para todos los días hábiles. El solver redistribuye INTERMEDIO y CIERRE entre `Asesor_2` y `Asesor_3`.
+
+**R7 — Rotación binaria de asesores libres**  
+`Asesor_2` y `Asesor_3` intercambian sus turnos (INTERMEDIO ↔ CIERRE) en semanas consecutivas. Requiere R6 activa.
+
+---
 
 
 ## DataFrame generado

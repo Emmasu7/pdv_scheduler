@@ -15,6 +15,8 @@ ASESORES = ["Asesor_1", "Asesor_2", "Asesor_3"]
 ASESOR_FIJO = "Asesor_1"
 TURNO_FIJO = "APERTURA"
 
+ESTADOS_VALIDOS = {"OPTIMAL", "FEASIBLE"}
+
 
 def _lunes_semana_actual() -> str:
     """Retorna la fecha del lunes de la semana actual en formato ISO (YYYY-MM-DD)."""
@@ -39,6 +41,9 @@ def index():
 def planificar():
     """
     Recibe el formulario, instancia PDVScheduler y ejecuta el solver.
+    Flujo:
+      1. scheduler.resolver()        → ejecuta CP-SAT, retorna estado string
+      2. scheduler.obtener_dataframe() → retorna DataFrame con la planificación
     Renderiza resultado.html con la tabla de turnos o un mensaje de error amigable.
     """
     try:
@@ -72,21 +77,27 @@ def planificar():
         )
 
         # ── Ejecución del solver ──────────────────────────────────────────────
-        df = scheduler.planificar()
+        estado = scheduler.resolver()
 
-        if df is None or df.empty:
+        if estado not in ESTADOS_VALIDOS:
             raise RuntimeError(
-                "El solver no encontró una solución factible para los parámetros indicados. "
+                f"El solver no encontró una solución factible (estado: {estado}). "
                 "Intenta con otra fecha de inicio o verifica que existan días hábiles en el período."
             )
 
-        # ── Preparación de datos para la plantilla ────────────────────────────
-        # Construir estructura: lista de dicts por fila
-        registros = df.to_dict(orient="records")
+        # ── Obtención del DataFrame ───────────────────────────────────────────
+        df = scheduler.obtener_dataframe()
 
-        # Calcular resumen
+        if df is None or df.empty:
+            raise RuntimeError(
+                "El solver resolvió correctamente pero no generó registros. "
+                "Verifica que el período seleccionado contenga días hábiles."
+            )
+
+        # ── Preparación de datos para la plantilla ────────────────────────────
+        registros = df.to_dict(orient="records")
         fecha_fin = fecha_inicio + timedelta(weeks=semanas) - timedelta(days=1)
-        total_dias_habiles = len(df["Fecha"].unique()) if "Fecha" in df.columns else len(df)
+        total_dias_habiles = df["Fecha"].nunique() if "Fecha" in df.columns else len(df)
 
         return render_template(
             "resultado.html",
@@ -102,7 +113,6 @@ def planificar():
         )
 
     except (ValueError, RuntimeError) as exc:
-        # Errores esperados: parámetros inválidos o solver infactible
         return render_template(
             "resultado.html",
             registros=[],
@@ -116,7 +126,6 @@ def planificar():
             error=str(exc),
         )
     except Exception as exc:
-        # Errores inesperados: mostrar mensaje genérico sin exponer trazas internas
         return render_template(
             "resultado.html",
             registros=[],

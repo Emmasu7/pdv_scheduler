@@ -31,8 +31,8 @@ ASESORES: list[str] = ["Asesor_1", "Asesor_2", "Asesor_3"]
 """Lista de los tres asesores del punto de venta."""
 
 # Índices para la restricción especial R5
-_ASESOR_FIJO_IDX: int = 0                        # Asesor_1
-_TURNO_FIJO_IDX: int  = TURNOS.index("APERTURA") # Turno fijo = APERTURA
+_ASESOR_FIJO_IDX: int = 0
+_TURNO_FIJO_IDX: int = TURNOS.index("APERTURA")
 
 # Nombres de días en español para el DataFrame final
 _DIAS_ES: dict[int, str] = {
@@ -57,26 +57,19 @@ def calcular_dias_habiles(
     Calcula los días hábiles dentro del rango [fecha_inicio, fecha_fin].
 
     Un día es hábil si cumple ambas condiciones:
-        - No es domingo  (weekday() != 6).
+        - No es domingo (weekday() != 6).
         - No es festivo colombiano según la librería `holidays`.
 
     Args:
         fecha_inicio: Primer día del período de planificación (inclusive).
-        fecha_fin:    Último día del período de planificación (inclusive).
+        fecha_fin: Último día del período de planificación (inclusive).
 
     Returns:
         Lista ordenada ascendentemente de objetos ``date`` que son días hábiles.
 
     Raises:
-        TypeError:  Si alguno de los argumentos no es instancia de ``datetime.date``.
+        TypeError: Si alguno de los argumentos no es instancia de ``datetime.date``.
         ValueError: Si ``fecha_inicio`` es posterior a ``fecha_fin``.
-
-    Ejemplo::
-
-        >>> from datetime import date
-        >>> dias = calcular_dias_habiles(date(2025, 1, 6), date(2025, 1, 11))
-        >>> len(dias)
-        5  # lunes a sábado excluyendo festivos
     """
     if not isinstance(fecha_inicio, date) or not isinstance(fecha_fin, date):
         raise TypeError(
@@ -90,7 +83,6 @@ def calcular_dias_habiles(
             f"'fecha_fin' ({fecha_fin})."
         )
 
-    # Cargar festivos colombianos para todos los años que abarca el rango
     festivos_co = holidays.Colombia(
         years=range(fecha_inicio.year, fecha_fin.year + 1)
     )
@@ -99,7 +91,7 @@ def calcular_dias_habiles(
     cursor = fecha_inicio
 
     while cursor <= fecha_fin:
-        es_domingo = cursor.weekday() == 6       # 6 = Sunday en Python
+        es_domingo = cursor.weekday() == 6
         es_festivo = cursor in festivos_co
 
         if not es_domingo and not es_festivo:
@@ -132,13 +124,11 @@ def _agrupar_por_semana(dias_habiles: list[date]) -> dict[int, list[date]]:
             "La lista de días hábiles está vacía. No es posible agrupar por semana."
         )
 
-    # Agrupar por número ISO de semana manteniendo el orden cronológico
     semanas_iso: dict[int, list[date]] = {}
     for dia in dias_habiles:
-        clave_iso = dia.isocalendar()[1]          # Número de semana ISO (1–53)
+        clave_iso = dia.isocalendar()[1]
         semanas_iso.setdefault(clave_iso, []).append(dia)
 
-    # Reindexar con 0, 1, 2, … para acceso posicional uniforme
     semanas_seq: dict[int, list[date]] = {
         idx: dias_sem
         for idx, dias_sem in enumerate(semanas_iso.values())
@@ -160,23 +150,16 @@ class PDVScheduler:
     y la resolución del problema de asignación de turnos.
 
     Args:
-        fecha_inicio    : Primer día del período de planificación.
-        fecha_fin       : Último día del período de planificación.
-        aplicar_r5      : Si ``True``, Asesor_1 solo puede tener turno APERTURA.
+        fecha_inicio: Primer día del período de planificación.
+        fecha_fin: Último día del período de planificación.
+        aplicar_r5: Si ``True``, Asesor_1 solo puede tener turno APERTURA.
         aplicar_rotacion: Si ``True``, activa la rotación semanal (R6).
 
     Raises:
-        TypeError:    Si las fechas no son instancias de ``datetime.date``.
-        ValueError:   Si no existen días hábiles en el rango especificado.
+        TypeError: Si las fechas no son instancias de ``datetime.date``.
+        ValueError: Si no existen días hábiles en el rango especificado.
         RuntimeError: Si el solver CP-SAT no encuentra solución al llamar
-                      a :meth:`resolver`.
-
-    Uso típico::
-
-        from datetime import date
-        sched = PDVScheduler(date(2025, 4, 7), date(2025, 4, 12))
-        df    = sched.resolver()
-        print(df.to_string(index=False))
+            a :meth:`resolver`.
     """
 
     def __init__(
@@ -191,21 +174,20 @@ class PDVScheduler:
         el modelo CP-SAT completo (variables + restricciones).
 
         Args:
-            fecha_inicio    : Primer día del período (inclusive).
-            fecha_fin       : Último día del período (inclusive).
-            aplicar_r5      : Activa la restricción de turno fijo para Asesor_1.
+            fecha_inicio: Primer día del período (inclusive).
+            fecha_fin: Último día del período (inclusive).
+            aplicar_r5: Activa la restricción de turno fijo para Asesor_1.
             aplicar_rotacion: Activa la rotación semanal entre semanas (R6).
 
         Raises:
-            TypeError:  Si las fechas no son instancias de ``datetime.date``.
+            TypeError: Si las fechas no son instancias de ``datetime.date``.
             ValueError: Si no hay días hábiles en el rango proporcionado.
         """
-        self.fecha_inicio     = fecha_inicio
-        self.fecha_fin        = fecha_fin
-        self.aplicar_r5       = aplicar_r5
+        self.fecha_inicio = fecha_inicio
+        self.fecha_fin = fecha_fin
+        self.aplicar_r5 = aplicar_r5
         self.aplicar_rotacion = aplicar_rotacion
 
-        # ── Días hábiles y agrupación semanal ──────────────────────────────
         self.dias_habiles: list[date] = calcular_dias_habiles(fecha_inicio, fecha_fin)
 
         if not self.dias_habiles:
@@ -217,326 +199,322 @@ class PDVScheduler:
 
         self.semanas: dict[int, list[date]] = _agrupar_por_semana(self.dias_habiles)
 
-        # ── Modelo y solver CP-SAT ──────────────────────────────────────────
-        self._modelo: cp_model.CpModel  = cp_model.CpModel()
+        self._modelo: cp_model.CpModel = cp_model.CpModel()
         self._solver: cp_model.CpSolver = cp_model.CpSolver()
-
-        # Diccionario de variables booleanas: (asesor_idx, fecha, turno_idx) → BoolVar
         self._vars: dict[tuple[int, date, int], cp_model.IntVar] = {}
-
-        # Estado de la última llamada a resolver()
         self._status: int | None = None
-
-        # DataFrame resultado (disponible tras resolver())
         self._df_resultado: pd.DataFrame | None = None
 
-        # ── Construcción del modelo ─────────────────────────────────────────
         self._crear_variables()
         self._agregar_restricciones()
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Creación de variables booleanas
-    # ─────────────────────────────────────────────────────────────────────────
 
     def _crear_variables(self) -> None:
         """
         Crea las variables booleanas del modelo CP-SAT.
 
-        Para cada tripleta (asesor ``a``, día hábil ``d``, turno ``t``) define::
+        Para cada tripleta (asesor ``a``, día hábil ``d``, turno ``t``) define
+        una variable booleana que vale 1 cuando el asesor trabaja ese turno
+        en ese día.
 
-            vars[a][d][t]  ∈  {0, 1}
-
-        donde el valor 1 significa "el asesor ``a`` trabaja el turno ``t``
-        el día ``d``".
-
-        La creación está acotada a los días hábiles calculados (R4 implícita):
-        nunca se generan variables para domingos ni festivos.
+        Raises:
+            RuntimeError: Si ocurre un error al crear variables del modelo.
         """
-        for a_idx in range(len(ASESORES)):
-            for dia in self.dias_habiles:            # R4: solo días hábiles
-                for t_idx in range(len(TURNOS)):
-                    nombre_var = f"turno_a{a_idx}_d{dia}_t{t_idx}"
-                    self._vars[(a_idx, dia, t_idx)] = (
-                        self._modelo.new_bool_var(nombre_var)
-                    )
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Orquestador de restricciones
-    # ─────────────────────────────────────────────────────────────────────────
+        try:
+            for a_idx in range(len(ASESORES)):
+                for dia in self.dias_habiles:
+                    for t_idx in range(len(TURNOS)):
+                        nombre_var = f"turno_a{a_idx}_d{dia}_t{t_idx}"
+                        self._vars[(a_idx, dia, t_idx)] = (
+                            self._modelo.new_bool_var(nombre_var)
+                        )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Error al crear las variables del modelo: {exc}"
+            ) from exc
 
     def _agregar_restricciones(self) -> None:
         """
-        Agrega al modelo todas las restricciones duras (hard constraints).
+        Agrega al modelo todas las restricciones duras.
 
-        Llama en orden a los métodos privados de cada restricción:
-            - R1: Un turno por asesor por día.
-            - R2: Cobertura total de turnos por día.
-            - R3: Mismo turno durante toda la semana.
-            - R5: (condicional) Turno fijo APERTURA para Asesor_1.
-            - R6: (condicional) Rotación entre semanas consecutivas.
-
-        R4 es implícita: las variables solo existen para días hábiles.
+        Raises:
+            RuntimeError: Si ocurre un error agregando restricciones.
         """
-        self._r1_un_turno_por_asesor()
-        self._r2_cobertura_total()
-        self._r3_mismo_turno_semana()
+        try:
+            self._r1_un_turno_por_asesor()
+            self._r2_cobertura_total()
+            self._r3_mismo_turno_semana()
 
-        if self.aplicar_r5:
-            self._r5_turno_fijo_asesor1()
+            if self.aplicar_r5:
+                self._r5_turno_fijo_asesor1()
 
-        if self.aplicar_rotacion:
-            self._r6_rotacion_semanal()
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # R1 — Un turno por asesor por día
-    # ─────────────────────────────────────────────────────────────────────────
+            if self.aplicar_rotacion:
+                self._r6_rotacion_semanal()
+        except Exception as exc:
+            raise RuntimeError(
+                f"Error al agregar restricciones al modelo: {exc}"
+            ) from exc
 
     def _r1_un_turno_por_asesor(self) -> None:
         """
         R1 — Exactamente un turno asignado por asesor por día hábil.
 
-        Formulación matemática::
-
-            ∀ a ∈ ASESORES, ∀ d ∈ dias_habiles:
-                Σ_{t} vars[a][d][t]  =  1
-
-        Garantiza que un asesor no pueda tener dos turnos simultáneos
-        (p. ej., APERTURA y CIERRE en el mismo día).
+        Raises:
+            RuntimeError: Si ocurre un error al agregar la restricción.
         """
-        for a_idx in range(len(ASESORES)):
-            for dia in self.dias_habiles:
-                self._modelo.add_exactly_one(
-                    self._vars[(a_idx, dia, t_idx)]
-                    for t_idx in range(len(TURNOS))
-                )
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # R2 — Cobertura total
-    # ─────────────────────────────────────────────────────────────────────────
+        try:
+            for a_idx in range(len(ASESORES)):
+                for dia in self.dias_habiles:
+                    self._modelo.add_exactly_one(
+                        self._vars[(a_idx, dia, t_idx)]
+                        for t_idx in range(len(TURNOS))
+                    )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Error al agregar la restricción R1: {exc}"
+            ) from exc
 
     def _r2_cobertura_total(self) -> None:
         """
         R2 — Cada turno debe estar cubierto por exactamente un asesor por día.
 
-        Formulación matemática::
-
-            ∀ t ∈ TURNOS, ∀ d ∈ dias_habiles:
-                Σ_{a} vars[a][d][t]  =  1
-
-        Garantiza que los tres turnos (APERTURA, INTERMEDIO, CIERRE) estén
-        siempre asignados; ningún asesor puede quedar sin turno ni ningún
-        turno puede quedar sin asesor.
+        Raises:
+            RuntimeError: Si ocurre un error al agregar la restricción.
         """
-        for t_idx in range(len(TURNOS)):
-            for dia in self.dias_habiles:
-                self._modelo.add_exactly_one(
-                    self._vars[(a_idx, dia, t_idx)]
-                    for a_idx in range(len(ASESORES))
-                )
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # R3 — Mismo turno toda la semana
-    # ─────────────────────────────────────────────────────────────────────────
+        try:
+            for t_idx in range(len(TURNOS)):
+                for dia in self.dias_habiles:
+                    self._modelo.add_exactly_one(
+                        self._vars[(a_idx, dia, t_idx)]
+                        for a_idx in range(len(ASESORES))
+                    )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Error al agregar la restricción R2: {exc}"
+            ) from exc
 
     def _r3_mismo_turno_semana(self) -> None:
         """
         R3 — Consistencia semanal: el asesor mantiene el mismo turno toda la semana.
 
-        Estrategia de modelado:
-            Se toma el primer día hábil de cada semana como día de referencia ``d0``.
-            Para cada día posterior ``d`` de la misma semana se añade la restricción::
-
-                ∀ a ∈ ASESORES, ∀ t ∈ TURNOS, ∀ d ∈ semana[1:]:
-                    vars[a][d][t]  ==  vars[a][d0][t]
-
-        Esto asegura que si el lunes al Asesor_1 se le asignó APERTURA,
-        todos los demás días hábiles de esa semana el Asesor_1 tendrá APERTURA.
-
-        Nota:
-            Semanas de un único día hábil se omiten (la restricción es trivial).
+        Raises:
+            RuntimeError: Si ocurre un error al agregar la restricción.
         """
-        for sem_idx, dias_semana in self.semanas.items():
-            if len(dias_semana) < 2:
-                # Una sola jornada: restricción trivialmente satisfecha
-                continue
+        try:
+            for _, dias_semana in self.semanas.items():
+                if len(dias_semana) < 2:
+                    continue
 
-            dia_ref = dias_semana[0]          # Primer día hábil de la semana
+                dia_ref = dias_semana[0]
 
-            for dia in dias_semana[1:]:
-                for a_idx in range(len(ASESORES)):
-                    for t_idx in range(len(TURNOS)):
-                        self._modelo.add(
-                            self._vars[(a_idx, dia, t_idx)]
-                            == self._vars[(a_idx, dia_ref, t_idx)]
-                        )
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # R5 — Turno fijo APERTURA para Asesor_1 (opcional)
-    # ─────────────────────────────────────────────────────────────────────────
+                for dia in dias_semana[1:]:
+                    for a_idx in range(len(ASESORES)):
+                        for t_idx in range(len(TURNOS)):
+                            self._modelo.add(
+                                self._vars[(a_idx, dia, t_idx)]
+                                == self._vars[(a_idx, dia_ref, t_idx)]
+                            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Error al agregar la restricción R3: {exc}"
+            ) from exc
 
     def _r5_turno_fijo_asesor1(self) -> None:
         """
-        R5 — Restricción especial: Asesor_1 solo puede trabajar en turno APERTURA.
+        R5 — Asesor_1 solo puede trabajar en turno APERTURA.
 
-        Fija directamente la variable correspondiente a 1 para cada día hábil::
-
-            ∀ d ∈ dias_habiles:
-                vars[_ASESOR_FIJO_IDX][d][_TURNO_FIJO_IDX]  =  1
-
-        El solver redistribuye automáticamente los turnos INTERMEDIO y CIERRE
-        entre los asesores restantes (Asesor_2 y Asesor_3).
-
-        Solo se activa si ``aplicar_r5 = True`` en el constructor.
+        Raises:
+            RuntimeError: Si ocurre un error al agregar la restricción.
         """
-        for dia in self.dias_habiles:
-            self._modelo.add(
-                self._vars[(_ASESOR_FIJO_IDX, dia, _TURNO_FIJO_IDX)] == 1
-            )
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # R6 — Rotación semanal (opcional)
-    # ─────────────────────────────────────────────────────────────────────────
+        try:
+            for dia in self.dias_habiles:
+                self._modelo.add(
+                    self._vars[(_ASESOR_FIJO_IDX, dia, _TURNO_FIJO_IDX)] == 1
+                )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Error al agregar la restricción R5: {exc}"
+            ) from exc
 
     def _r6_rotacion_semanal(self) -> None:
         """
-        R6 — Rotación semanal: un asesor no puede repetir el mismo turno
-        en semanas consecutivas.
-
-        Formulación matemática:
-            Para cada par de semanas consecutivas (n, n+1) con días de referencia
-            ``d0_n`` y ``d0_{n+1}`` respectivamente::
-
-                ∀ a ∈ ASESORES, ∀ t ∈ TURNOS:
-                    vars[a][d0_n][t]  +  vars[a][d0_{n+1}][t]  ≤  1
-
-        Garantiza que si en la semana N el Asesor_2 tuvo CIERRE,
-        en la semana N+1 deberá tener APERTURA o INTERMEDIO.
-
-        Nota:
-            Si R5 está activa, Asesor_1 queda excluido de esta restricción
-            porque su turno ya es fijo (APERTURA toda la semana).
-
-        Solo se activa si ``aplicar_rotacion = True`` en el constructor.
-        """
-        semana_keys = sorted(self.semanas.keys())
-
-        for i in range(len(semana_keys) - 1):
-            sem_actual    = semana_keys[i]
-            sem_siguiente = semana_keys[i + 1]
-
-            dia_ref_actual    = self.semanas[sem_actual][0]
-            dia_ref_siguiente = self.semanas[sem_siguiente][0]
-
-            for a_idx in range(len(ASESORES)):
-                # Asesor con turno fijo (R5) no necesita restricción de rotación
-                if self.aplicar_r5 and a_idx == _ASESOR_FIJO_IDX:
-                    continue
-
-                for t_idx in range(len(TURNOS)):
-                    self._modelo.add(
-                        self._vars[(a_idx, dia_ref_actual, t_idx)]
-                        + self._vars[(a_idx, dia_ref_siguiente, t_idx)]
-                        <= 1
-                    )
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Resolución del modelo
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def resolver(self) -> pd.DataFrame:
-        """
-        Ejecuta el solver CP-SAT sobre el modelo construido y retorna
-        la planificación resultante como un DataFrame de pandas.
-
-        Returns:
-            DataFrame con las columnas:
-                - **Semana**  : Número de semana secuencial (1, 2, …).
-                - **Fecha**   : Fecha del día en formato ``YYYY-MM-DD``.
-                - **Día**     : Nombre del día en español (Lunes, Martes, …).
-                - **Asesor_1**: Turno asignado a Asesor_1 ese día.
-                - **Asesor_2**: Turno asignado a Asesor_2 ese día.
-                - **Asesor_3**: Turno asignado a Asesor_3 ese día.
+        R6 — Un asesor no puede repetir el mismo turno en semanas consecutivas.
 
         Raises:
-            RuntimeError: Si el solver retorna INFEASIBLE, UNKNOWN u otro
-                          estado que no sea OPTIMAL o FEASIBLE.
-
-        Nota:
-            El DataFrame queda almacenado en ``self._df_resultado`` para
-            acceso posterior sin necesidad de volver a resolver.
+            RuntimeError: Si ocurre un error al agregar la restricción.
         """
-        self._status = self._solver.solve(self._modelo)
+        try:
+            semana_keys = sorted(self.semanas.keys())
 
-        estados_validos = {cp_model.OPTIMAL, cp_model.FEASIBLE}
+            for i in range(len(semana_keys) - 1):
+                sem_actual = semana_keys[i]
+                sem_siguiente = semana_keys[i + 1]
 
-        if self._status not in estados_validos:
-            nombre_estado = self._solver.status_name(self._status)
+                dia_ref_actual = self.semanas[sem_actual][0]
+                dia_ref_siguiente = self.semanas[sem_siguiente][0]
+
+                for a_idx in range(len(ASESORES)):
+                    if self.aplicar_r5 and a_idx == _ASESOR_FIJO_IDX:
+                        continue
+
+                    for t_idx in range(len(TURNOS)):
+                        self._modelo.add(
+                            self._vars[(a_idx, dia_ref_actual, t_idx)]
+                            + self._vars[(a_idx, dia_ref_siguiente, t_idx)]
+                            <= 1
+                        )
+        except Exception as exc:
             raise RuntimeError(
-                f"El solver CP-SAT no encontró una solución válida. "
-                f"Estado retornado: '{nombre_estado}'. "
-                "Posibles causas: restricciones incompatibles, rango de fechas "
-                "inválido o modelo mal construido."
-            )
+                f"Error al agregar la restricción R6: {exc}"
+            ) from exc
 
-        self._df_resultado = self._construir_dataframe()
-        return self._df_resultado
+    def resolver(self) -> str:
+        """
+        Ejecuta el solver CP-SAT y retorna el estado de la solución.
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Construcción del DataFrame de resultados
-    # ─────────────────────────────────────────────────────────────────────────
+        Returns:
+            ``"OPTIMAL"``, ``"FEASIBLE"`` o ``"INFEASIBLE"``.
+
+        Raises:
+            RuntimeError: Si el solver falla o retorna un estado inesperado.
+        """
+        try:
+            self._status = self._solver.solve(self._modelo)
+        except Exception as exc:
+            raise RuntimeError(
+                f"El solver CP-SAT lanzó una excepción inesperada: {exc}"
+            ) from exc
+
+        if self._status == cp_model.OPTIMAL:
+            self._df_resultado = self._construir_dataframe()
+            return "OPTIMAL"
+
+        if self._status == cp_model.FEASIBLE:
+            self._df_resultado = self._construir_dataframe()
+            return "FEASIBLE"
+
+        if self._status == cp_model.INFEASIBLE:
+            return "INFEASIBLE"
+
+        nombre_estado = self._solver.status_name(self._status)
+        raise RuntimeError(
+            f"El solver terminó con un estado no manejable: '{nombre_estado}'. "
+            "Revise que las restricciones del modelo sean consistentes."
+        )
+
+    def obtener_dataframe(self) -> pd.DataFrame:
+        """
+        Retorna el DataFrame de planificación con columnas:
+        Semana, Fecha, Día y una columna por asesor.
+
+        Returns:
+            ``pd.DataFrame`` con la planificación completa.
+
+        Raises:
+            RuntimeError: Si no existe una solución válida para exportar.
+        """
+        self._verificar_solucion_disponible()
+        return self._df_resultado.copy()
+
+    def obtener_dataframe_pivot(self) -> pd.DataFrame:
+        """
+        Retorna la planificación pivoteada con fechas como filas
+        y asesores como columnas.
+
+        Returns:
+            ``pd.DataFrame`` pivoteado.
+
+        Raises:
+            RuntimeError: Si no existe una solución válida para exportar.
+        """
+        df = self.obtener_dataframe()
+
+        try:
+            pivot = df.set_index("Fecha")[ASESORES].copy()
+            pivot.index.name = "Fecha"
+            return pivot
+        except Exception as exc:
+            raise RuntimeError(
+                f"Error al construir el DataFrame pivoteado: {exc}"
+            ) from exc
 
     def _construir_dataframe(self) -> pd.DataFrame:
         """
-        Construye el DataFrame de planificación a partir de los valores
-        de las variables en la solución encontrada por el solver.
+        Construye el DataFrame de planificación a partir de la solución del solver.
 
         Returns:
             DataFrame con una fila por cada día hábil del período planificado.
 
         Raises:
-            RuntimeError: Si se invoca antes de que el solver haya resuelto
-                          el modelo (``_status`` es None).
+            RuntimeError: Si se invoca antes de resolver el modelo o si falla
+                la construcción del DataFrame.
         """
         if self._status is None:
             raise RuntimeError(
                 "Debe llamar a resolver() antes de construir el DataFrame."
             )
 
-        filas: list[dict] = []
+        try:
+            filas: list[dict] = []
 
-        for sem_idx, dias_semana in self.semanas.items():
-            for dia in dias_semana:
-                fila: dict = {
-                    "Semana": sem_idx + 1,
-                    "Fecha":  dia.strftime("%Y-%m-%d"),
-                    "Día":    _DIAS_ES.get(dia.weekday(), f"Día-{dia.weekday()}"),
-                }
+            for sem_idx, dias_semana in self.semanas.items():
+                for dia in dias_semana:
+                    fila: dict = {
+                        "Semana": sem_idx + 1,
+                        "Fecha": dia.strftime("%Y-%m-%d"),
+                        "Día": _DIAS_ES.get(dia.weekday(), f"Día-{dia.weekday()}"),
+                    }
 
-                for a_idx, asesor in enumerate(ASESORES):
-                    turno_asignado = "N/A"
-                    for t_idx, turno in enumerate(TURNOS):
-                        if self._solver.value(self._vars[(a_idx, dia, t_idx)]) == 1:
-                            turno_asignado = turno
-                            break
-                    fila[asesor] = turno_asignado
+                    for a_idx, asesor in enumerate(ASESORES):
+                        turno_asignado = "N/A"
+                        for t_idx, turno in enumerate(TURNOS):
+                            if self._solver.value(self._vars[(a_idx, dia, t_idx)]) == 1:
+                                turno_asignado = turno
+                                break
+                        fila[asesor] = turno_asignado
 
-                filas.append(fila)
+                    filas.append(fila)
 
-        df = pd.DataFrame(filas, columns=["Semana", "Fecha", "Día"] + ASESORES)
-        return df
+            return pd.DataFrame(
+                filas,
+                columns=["Semana", "Fecha", "Día"] + ASESORES,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Error al construir el DataFrame de resultados: {exc}"
+            ) from exc
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Propiedades de sólo lectura
-    # ─────────────────────────────────────────────────────────────────────────
+    def _verificar_solucion_disponible(self) -> None:
+        """
+        Valida que exista una solución lista para exportar.
+
+        Raises:
+            RuntimeError: Si resolver() no fue llamado o si el modelo no tiene
+                solución válida.
+        """
+        if self._status is None:
+            raise RuntimeError(
+                "No hay resultados disponibles. Llame a resolver() primero."
+            )
+
+        if self._status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            nombre_estado = self._solver.status_name(self._status)
+            raise RuntimeError(
+                f"No existe solución válida para exportar. "
+                f"Estado del solver: '{nombre_estado}'."
+            )
 
     @property
     def resultado(self) -> pd.DataFrame | None:
-        """Retorna el DataFrame de resultados si el modelo fue resuelto, o None."""
+        """
+        Retorna el DataFrame de resultados si el modelo fue resuelto, o ``None``.
+        """
         return self._df_resultado
 
     @property
     def estado_solver(self) -> str | None:
-        """Retorna el nombre del estado del solver tras la última ejecución."""
+        """
+        Retorna el nombre del estado del solver tras la última ejecución.
+        """
         if self._status is None:
             return None
         return self._solver.status_name(self._status)
